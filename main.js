@@ -10,10 +10,22 @@ class WorkTimeAdapter extends utils.Adapter {
             name: 'worktime'
         });
         
-        // Jetzt sind this.log und this.config verfügbar
+        // Fallback, falls this.log noch nicht definiert sein sollte
+        if (!this.log) {
+            this.log = {
+                info: console.log,
+                warn: console.warn,
+                error: console.error,
+                debug: console.debug
+            };
+        }
+        
+        // Stelle sicher, dass this.config existiert
         if (!this.config) {
             this.config = {};
         }
+        
+        // Setze Mitarbeiter-Standardwerte, falls noch nicht in config.employees hinterlegt
         if (!this.config.employees || Object.keys(this.config.employees).length === 0) {
             this.log.info('Keine Mitarbeiter in config.employees gefunden. Setze Standardwerte.');
             this.config.employees = {
@@ -22,7 +34,7 @@ class WorkTimeAdapter extends utils.Adapter {
             };
         }
         
-        // Setze Standard-Konfiguration, falls nicht vorhanden (optional)
+        // Setze weitere Standard-Konfigurationen
         this.config.appsScriptUrl = this.config.appsScriptUrl || 'YOUR_APPS_SCRIPT_URL';
         this.config.sheetName = this.config.sheetName || "Time Tracker";
         this.config.plannedWorkDayHours = Number(this.config.plannedWorkDayHours) || 8;
@@ -36,7 +48,6 @@ class WorkTimeAdapter extends utils.Adapter {
         this.on('stateChange', this.onStateChange.bind(this));
 
         // Interne Speicherung aktiver Arbeitssitzungen pro Device
-        // Struktur: { "traccar.0.devices.1": { customer: "Kundenname", startTime: <timestamp>, workDescription: "" } }
         this.activeSessions = {};
     }
 
