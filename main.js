@@ -3,7 +3,11 @@
 const utils = require('@iobroker/adapter-core');
 const fetch = require('node-fetch');
 const adapterName = require('./package.json').name.split('.').pop();
+let adapter;  // Globaler Adapter
 
+// ------------------------------
+// Adapter-Klasse
+// ------------------------------
 class WorkTimeAdapter extends utils.Adapter {
     constructor(options) {
         super({ ...options, name: 'ictb-time' });
@@ -15,11 +19,10 @@ class WorkTimeAdapter extends utils.Adapter {
     }
 
     async onReady() {
-        // Kunden und Mitarbeiter aus der nativen Konfiguration laden, falls nicht vorhanden, initialisieren
+        // Lade Kunden und Mitarbeiter aus der nativen Konfiguration oder initialisiere Standardwerte
         this.config.customers = this.config.customers || {};
         this.config.employees = this.config.employees || {};
 
-        // Falls noch keine Konfiguration vorhanden ist, Standardwerte setzen
         if (Object.keys(this.config.customers).length === 0) {
             this.config.customers = {
                 "Home-Herrengasse": {
@@ -50,7 +53,7 @@ class WorkTimeAdapter extends utils.Adapter {
         // Lege zusätzlich die TimeTracking-States in 0_userdata.0.TimeTracking an
         await createTimeTrackingStates(this);
 
-        // Abonniere die Zustände der Geofences (z.B. von traccar)
+        // Abonniere Geofence-Änderungen (Beispiel: für Device 1)
         this.subscribeForeignStates('traccar.0.devices.*.geofences_string');
 
         this.log.info('WorkTime Adapter gestartet. Aktuelle Konfiguration: ' +
@@ -59,16 +62,14 @@ class WorkTimeAdapter extends utils.Adapter {
 
     async onMessage(obj) {
         if (obj && obj.command === 'saveConfig') {
-            // Speichere die übergebene Konfiguration in der nativen Konfiguration
+            // Speichere die übergebene Konfiguration
             this.config.customers = obj.data.customers;
             this.config.employees = obj.data.employees;
             this.log.info('Konfiguration aktualisiert: ' + JSON.stringify(obj.data));
-            // Aktualisiere die Objekte im Objekttree
             await this.updateCustomerObjects();
             await this.updateEmployeeObjects();
             this.sendTo(obj.from, obj.command, { result: 'ok' }, obj.callback);
         } else if (obj && obj.command === 'getConfig') {
-            // Sende die aktuelle Konfiguration zurück
             this.sendTo(obj.from, obj.command, {
                 customers: this.config.customers,
                 employees: this.config.employees
@@ -81,10 +82,7 @@ class WorkTimeAdapter extends utils.Adapter {
             startkey: `${this.namespace}.kunden.`,
             endkey: `${this.namespace}.kunden.\u9999`
         });
-        let existingIds = [];
-        if (view && view.rows) {
-            existingIds = view.rows.map(row => row.id);
-        }
+        let existingIds = view && view.rows ? view.rows.map(row => row.id) : [];
         for (const custKey in this.config.customers) {
             const customer = this.config.customers[custKey];
             const objId = `${this.namespace}.kunden.${custKey}`;
@@ -109,10 +107,7 @@ class WorkTimeAdapter extends utils.Adapter {
             startkey: `${this.namespace}.mitarbeiter.`,
             endkey: `${this.namespace}.mitarbeiter.\u9999`
         });
-        let existingIds = [];
-        if (view && view.rows) {
-            existingIds = view.rows.map(row => row.id);
-        }
+        let existingIds = view && view.rows ? view.rows.map(row => row.id) : [];
         for (const empKey in this.config.employees) {
             const employee = this.config.employees[empKey];
             const objId = `${this.namespace}.mitarbeiter.${empKey}`;
@@ -133,14 +128,13 @@ class WorkTimeAdapter extends utils.Adapter {
 
     async onStateChange(id, state) {
         if (!state || state.val === undefined) return;
-        // Reagiere auf Änderungen am Geofence-Status (z.B. traccar.0.devices.1.geofences_string)
         const match = id.match(/(traccar\.0\.devices\.\d+)\.geofences_string/);
         if (!match) return;
-        // Hier verwenden wir direkt processGeofenceChange mit "this" als Parameter, damit wir die Adapter-API nutzen können
+        // Rufe die Geofence-Verarbeitung auf, übergebe "this" als Adapter-Instanz
         processGeofenceChange(this, { state: state, oldState: {} }).catch(err => this.log.error(err));
     }
 
-    async onUnload(callback) {
+    onUnload(callback) {
         try {
             callback();
         } catch (e) {
@@ -149,18 +143,18 @@ class WorkTimeAdapter extends utils.Adapter {
     }
 }
 
-// --------------------------
+// ------------------------------
 // Funktionen außerhalb der Klasse
-// --------------------------
+// ------------------------------
 
-// Hilfsfunktion: createStateIfNotExists, nutzt createStateAsync, um bestehende States nicht zu überschreiben
+// Hilfsfunktion: createStateIfNotExists (verwendet createStateAsync, um bestehende States nicht zu überschreiben)
 async function createStateIfNotExists(adapterInstance, id, initialValue, commonObj) {
     await adapterInstance.createStateAsync(id, initialValue, false, commonObj);
 }
 
 // Funktion zum Anlegen der TimeTracking-States in 0_userdata.0.TimeTracking
 async function createTimeTrackingStates(adapterInstance) {
-    // Array mit Kundendaten – statisch, kann auch aus der Konfiguration geladen werden
+    // Array mit Kundendaten – statisch, kann alternativ aus einer Konfiguration geladen werden.
     const customers = [
         {
             name: "HW2-9-Wohlen",
@@ -257,7 +251,6 @@ async function createTimeTrackingStates(adapterInstance) {
             write: true,
             def: address
         });
-
         adapterInstance.log.info(`TimeTracking-States für "${geofenceName}" angelegt oder aktualisiert.`);
     }
 
@@ -295,7 +288,7 @@ async function createTimeTrackingStates(adapterInstance) {
         def: ""
     });
 
-    adapter.log.info("Alle TimeTracking-States für Kunden und manuelle Büroarbeit wurden angelegt/aktualisiert.");
+    adapterInstance.log.info("Alle TimeTracking-States für Kunden und manuelle Büroarbeit wurden angelegt/aktualisiert.");
 }
 
 // Hilfsfunktion zum Warten
@@ -345,7 +338,7 @@ async function createLogEntry(geofenceID, timeSpentHours) {
 }
 
 // Verarbeitet Änderungen am Geofence-State (z.B. traccar.0.devices.1.geofences_string)
-// Diese Funktion erwartet als ersten Parameter die Adapter-Instanz, damit wir über "this" (bzw. adapter) arbeiten können.
+// Nutzt die Adapter-Instanz als Parameter
 async function processGeofenceChange(adapterInstance, obj) {
     const newID = (obj.state.val || "").trim();
     const oldID = (obj.oldState && obj.oldState.val ? obj.oldState.val : "").trim();
@@ -385,7 +378,9 @@ async function processGeofenceChange(adapterInstance, obj) {
     lastGeofenceID = newID;
 }
 
+// ------------------------------
 // Adapter starten
+// ------------------------------
 function startAdapter(options) {
     options = options || {};
     Object.assign(options, { name: adapterName });
@@ -396,7 +391,6 @@ function startAdapter(options) {
         adapter.config.customers = adapter.config.customers || {};
         adapter.config.employees = adapter.config.employees || {};
 
-        // Falls keine Konfiguration vorhanden, Standardwerte setzen
         if (Object.keys(adapter.config.customers).length === 0) {
             adapter.config.customers = {
                 "Home-Herrengasse": {
@@ -420,11 +414,9 @@ function startAdapter(options) {
             };
         }
 
-        // Aktualisiere Objekte im ioBroker-Objekttree
         await adapter.updateCustomerObjects();
         await adapter.updateEmployeeObjects();
 
-        // Lege die TimeTracking-States in 0_userdata.0.TimeTracking an
         await createTimeTrackingStates(adapter);
 
         // Abonniere den Geofence-Status (z.B. für Device 1)
