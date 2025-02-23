@@ -1,15 +1,15 @@
 "use strict";
 
-// Lokale Speicherung – diese Daten sollten später über die Adapterkonfiguration
-// in ioBroker persistiert werden (z.B. via adapter.config)
-let customers = {};  // z.B. { "Home-Herrengasse": { name:"Home-Herrengasse", address:"Herrengasse 1, Musterstadt", hourlyRate:50, assignment:"Installation" } }
-let employees = {};  // z.B. { "traccar.0.devices.1": { firstName:"Max", lastName:"Mustermann" } }
+// Lokale Speicherung – in einem echten Adapter würden diese Daten über die Adapterkonfiguration
+// (adapter.config) oder per persistenter Speicherung in ioBroker abgelegt.
+let customers = {};  // Beispiel: { "Home-Herrengasse": { name:"Home-Herrengasse", address:"Herrengasse 1", hourlyRate:50, assignment:"Installation" } }
+let employees = {};  // Beispiel: { "traccar.0.devices.1": { firstName:"Max", lastName:"Mustermann" } }
 
 // Fügt einen neuen Kunden hinzu und aktualisiert die Anzeige
 function addCustomer(customer) {
     customers[customer.name] = customer;
     updateCustomerList();
-    // Hier kann ein Aufruf an den Adapter erfolgen, um die Konfiguration zu speichern (z.B. via socket.emit("setConfig", ...))
+    // Hier kannst du die Daten an den Adapter senden, falls benötigt.
 }
 
 // Aktualisiert die Kundenliste in der UI
@@ -27,7 +27,7 @@ function updateCustomerList() {
 function addEmployee(employee) {
     employees[employee.deviceId] = employee;
     updateEmployeeList();
-    // Auch hier kann ein Konfigurationsspeicher-Aufruf erfolgen
+    // Auch hier kannst du die Daten per Adapter-API speichern.
 }
 
 // Aktualisiert die Mitarbeiterliste in der UI
@@ -66,7 +66,7 @@ document.getElementById("employeeForm").addEventListener("submit", function(e) {
     this.reset();
 });
 
-// Beispielhafter Code, um Arbeitslogeinträge (Logs) anzuzeigen
+// Beispielhafter Code, um Arbeitslogeinträge anzuzeigen
 function updateWorkLog(logEntries) {
     const logDiv = document.getElementById("workLog");
     logDiv.innerHTML = "";
@@ -83,5 +83,5 @@ function updateWorkLog(logEntries) {
     });
 }
 
-// Hier könnte man über den ioBroker-Adapter (z.B. socket.io) die bestehenden Konfigurationen und Logs laden
+// Hier kannst du über den ioBroker-Adapter die bestehenden Konfigurationen und Logs laden
 // und die Funktionen updateCustomerList(), updateEmployeeList() und updateWorkLog() aufrufen.
