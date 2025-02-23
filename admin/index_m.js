@@ -1,15 +1,30 @@
 "use strict";
 
-// Lokale Speicherung – in einem echten Adapter würden diese Daten über die Adapterkonfiguration
-// (adapter.config) oder per persistenter Speicherung in ioBroker abgelegt.
-let customers = {};  // Beispiel: { "Home-Herrengasse": { name:"Home-Herrengasse", address:"Herrengasse 1", hourlyRate:50, assignment:"Installation" } }
-let employees = {};  // Beispiel: { "traccar.0.devices.1": { firstName:"Max", lastName:"Mustermann" } }
+// Lokale Speicherung – diese Daten werden vom Backend geladen
+let customers = {};
+let employees = {};
 
-// Fügt einen neuen Kunden hinzu und aktualisiert die Anzeige
-function addCustomer(customer) {
-    customers[customer.name] = customer;
-    updateCustomerList();
-    // Hier kannst du die Daten an den Adapter senden, falls benötigt.
+// Stelle über Socket.IO eine Verbindung zum Backend her
+// (Im ioBroker Admin-UI ist eine Socket-Verbindung in der Regel bereits vorhanden)
+const socket = io.connect(window.location.origin);
+
+// Funktion, um die aktuelle Konfiguration vom Adapter abzurufen
+function loadConfig() {
+    socket.emit('getConfig', null, function (response) {
+        if (response && response.result) {
+            customers = response.result.customers || {};
+            employees = response.result.employees || {};
+            updateCustomerList();
+            updateEmployeeList();
+        }
+    });
+}
+
+// Funktion zum Speichern der aktuellen Konfiguration an das Backend
+function saveConfig() {
+    socket.emit('saveConfig', { customers: customers, employees: employees }, function (response) {
+        console.log("Konfiguration gespeichert:", response);
+    });
 }
 
 // Aktualisiert die Kundenliste in der UI
@@ -21,13 +36,6 @@ function updateCustomerList() {
         li.textContent = `${customers[key].name} – ${customers[key].address} – ${customers[key].hourlyRate} EUR – ${customers[key].assignment}`;
         list.appendChild(li);
     }
-}
-
-// Fügt einen neuen Mitarbeiter hinzu und aktualisiert die Anzeige
-function addEmployee(employee) {
-    employees[employee.deviceId] = employee;
-    updateEmployeeList();
-    // Auch hier kannst du die Daten per Adapter-API speichern.
 }
 
 // Aktualisiert die Mitarbeiterliste in der UI
@@ -50,7 +58,10 @@ document.getElementById("customerForm").addEventListener("submit", function(e) {
         hourlyRate: parseFloat(document.getElementById("hourlyRate").value),
         assignment: document.getElementById("assignment").value
     };
-    addCustomer(customer);
+    // Kunde hinzufügen oder überschreiben
+    customers[customer.name] = customer;
+    updateCustomerList();
+    saveConfig();
     this.reset();
 });
 
@@ -62,26 +73,17 @@ document.getElementById("employeeForm").addEventListener("submit", function(e) {
         firstName: document.getElementById("firstName").value,
         lastName: document.getElementById("lastName").value
     };
-    addEmployee(employee);
+    // Mitarbeiter hinzufügen oder überschreiben
+    employees[employee.deviceId] = employee;
+    updateEmployeeList();
+    saveConfig();
     this.reset();
 });
 
-// Beispielhafter Code, um Arbeitslogeinträge anzuzeigen
-function updateWorkLog(logEntries) {
-    const logDiv = document.getElementById("workLog");
-    logDiv.innerHTML = "";
-    logEntries.forEach(entry => {
-        const div = document.createElement("div");
-        div.style.borderBottom = "1px solid #ccc";
-        div.style.marginBottom = "5px";
-        div.innerHTML = `<strong>${entry.employee}</strong> bei <em>${entry.customer}</em><br>
-                         Start: ${entry.startTime}<br>
-                         Ende: ${entry.endTime}<br>
-                         Dauer: ${entry.durationHours.toFixed(2)} Stunden<br>
-                         Beschreibung: ${entry.workDescription || "-"}`;
-        logDiv.appendChild(div);
-    });
-}
+// Event-Listener für den "Konfiguration speichern" Button (optional, da bei Formularänderungen automatisch gespeichert wird)
+document.getElementById("saveConfigBtn").addEventListener("click", function() {
+    saveConfig();
+});
 
-// Hier kannst du über den ioBroker-Adapter die bestehenden Konfigurationen und Logs laden
-// und die Funktionen updateCustomerList(), updateEmployeeList() und updateWorkLog() aufrufen.
+// Beim Laden der Seite Konfiguration abrufen
+loadConfig();
