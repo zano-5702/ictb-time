@@ -1,6 +1,7 @@
 'use strict';
 
 const utils = require('@iobroker/adapter-core'); // Adapter utilities
+const fetch = require('node-fetch'); // Stelle sicher, dass node-fetch als Dependency vorhanden ist
 
 class WorkTimeAdapter extends utils.Adapter {
     constructor(options) {
@@ -8,14 +9,11 @@ class WorkTimeAdapter extends utils.Adapter {
             ...options,
             name: 'worktime'
         });
-        this.on('ready', this.onReady.bind(this));
-        this.on('stateChange', this.onStateChange.bind(this));
-
-        // Interne Speicherung aktiver Arbeitssitzungen pro Device
-        // Struktur: { "traccar.0.devices.1": { customer: "Kundenname", startTime: <timestamp>, workDescription: "" } }
-        this.activeSessions = {};
-
-        // Falls in den Konfigurationen noch keine Mitarbeiter vorhanden sind, Standardwerte setzen
+        
+        // Jetzt sind this.log und this.config verfügbar
+        if (!this.config) {
+            this.config = {};
+        }
         if (!this.config.employees || Object.keys(this.config.employees).length === 0) {
             this.log.info('Keine Mitarbeiter in config.employees gefunden. Setze Standardwerte.');
             this.config.employees = {
@@ -23,6 +21,23 @@ class WorkTimeAdapter extends utils.Adapter {
                 "traccar.0.devices.2": { firstName: "Erika", lastName: "Musterfrau" }
             };
         }
+        
+        // Setze Standard-Konfiguration, falls nicht vorhanden (optional)
+        this.config.appsScriptUrl = this.config.appsScriptUrl || 'YOUR_APPS_SCRIPT_URL';
+        this.config.sheetName = this.config.sheetName || "Time Tracker";
+        this.config.plannedWorkDayHours = Number(this.config.plannedWorkDayHours) || 8;
+        this.config.firstBreakThresholdHours = Number(this.config.firstBreakThresholdHours) || 6;
+        this.config.firstBreakMinutes = Number(this.config.firstBreakMinutes) || 30;
+        this.config.secondBreakThresholdHours = Number(this.config.secondBreakThresholdHours) || 9;
+        this.config.secondBreakMinutes = Number(this.config.secondBreakMinutes) || 15;
+
+        // Event-Handler binden
+        this.on('ready', this.onReady.bind(this));
+        this.on('stateChange', this.onStateChange.bind(this));
+
+        // Interne Speicherung aktiver Arbeitssitzungen pro Device
+        // Struktur: { "traccar.0.devices.1": { customer: "Kundenname", startTime: <timestamp>, workDescription: "" } }
+        this.activeSessions = {};
     }
 
     async onReady() {
@@ -46,7 +61,7 @@ class WorkTimeAdapter extends utils.Adapter {
                 hourlyRate: 75,
                 assignment: "Consulting"
             }
-            // Weitere Kunden ...
+            // Weitere Kunden können hier hinzugefügt werden
         };
         this.log.info('Kundenstamm geladen:', JSON.stringify(this.customers));
 
@@ -69,18 +84,18 @@ class WorkTimeAdapter extends utils.Adapter {
     }
 
     /**
-     * Wird bei Zustandsänderungen (z. B. geofences_string) aufgerufen.
-     * @param {string} id - z.B. traccar.0.devices.1.geofences_string
+     * Handler für Zustandsänderungen (z. B. geofences_string).
+     * @param {string} id - z.B. "traccar.0.devices.1.geofences_string"
      * @param {object} state - Enthält den neuen Wert, Zeitstempel etc.
      */
     async onStateChange(id, state) {
         this.log.debug(`onStateChange aufgerufen für ${id} mit state: ${JSON.stringify(state)}`);
         if (!state || state.val === undefined) {
-            this.log.debug('State oder State.val ist undefined – ignoriere.');
+            this.log.debug('State oder state.val ist undefined – ignoriere.');
             return;
         }
         
-        // Extrahiere die Geräte-ID (z. B. "traccar.0.devices.1")
+        // Extrahiere die Geräte-ID, z.B. "traccar.0.devices.1"
         const match = id.match(/(traccar\.0\.devices\.\d+)\.geofences_string/);
         if (!match) {
             this.log.warn(`Kein Geräte-Match für id ${id}`);
@@ -175,7 +190,10 @@ class WorkTimeAdapter extends utils.Adapter {
         await this.setStateAsync(logStateId, { val: JSON.stringify(logEntry), ack: true });
         this.log.info(`Arbeitseinsatz protokolliert: ${JSON.stringify(logEntry)}`);
 
+        // Aktive Sitzung entfernen
         delete this.activeSessions[deviceKey];
+
+        // Aggregationen aktualisieren (Platzhalterfunktion)
         await this.updateAggregates(employee, logEntry);
     }
 
@@ -184,7 +202,7 @@ class WorkTimeAdapter extends utils.Adapter {
      */
     async updateAggregates(employee, logEntry) {
         this.log.info(`Aktualisiere Aggregatwerte für ${employee.firstName} ${employee.lastName} mit ${logEntry.durationHours.toFixed(2)} Stunden.`);
-        // Hier: Aggregationen abrufen, aktualisieren und speichern.
+        // Hier: Aggregationslogik implementieren (z.B. Tages-, Wochen-, Monats-, Jahreswerte berechnen)
     }
 
     /**
