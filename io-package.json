@@ -1,0 +1,91 @@
+{
+    "common": {
+        "name": "ictb-time",
+        "version": "0.0.1",
+        "news": {
+            "0.0.1": {
+                "en": "initial release",
+                "de": "ErstverÃ¶ffentlichung",
+                "ru": "ÐÐ°Ñ‡Ð°Ð»ÑŒÐ½Ð°Ñ Ð²ÐµÑ€ÑÐ¸Ñ",
+                "pt": "lanÃ§amento inicial",
+                "nl": "Eerste uitgave",
+                "fr": "PremiÃ¨re version",
+                "it": "Versione iniziale",
+                "es": "VersiÃ³n inicial",
+                "pl": "Pierwsze wydanie",
+                "uk": "ÐŸÐ¾Ñ‡Ð°Ñ‚ÐºÐ¾Ð²Ð° Ð²ÐµÑ€ÑÑ–Ñ",
+                "zh-cn": "é¦–æ¬¡å‡ºç‰ˆ"
+            }
+        },
+        "titleLang": {
+            "en": "ictb-time",
+            "de": "meine Zeit",
+            "ru": "Ð¼Ð¾Ðµ Ð²Ñ€ÐµÐ¼Ñ",
+            "pt": "meu tempo",
+            "nl": "mijn tijd",
+            "fr": "mon temps",
+            "it": "la mia volta",
+            "es": "mi tiempo",
+            "pl": "MÃ³j czas",
+            "uk": "Ð¼Ñ–Ð¹ Ñ‡Ð°Ñ",
+            "zh-cn": "æˆ‘çš„æ—¶é—´"
+        },
+        "desc": {
+            "en": "test",
+            "de": "prÃ¼fen",
+            "ru": "Ñ‚ÐµÑÑ‚",
+            "pt": "teste",
+            "nl": "test",
+            "fr": "test",
+            "it": "test",
+            "es": "prueba",
+            "pl": "test",
+            "uk": "Ñ‚ÐµÑÑ‚",
+            "zh-cn": "æµ‹è¯•"
+        },
+        "authors": [
+            "zano <oliver@zanyi.ch>"
+        ],
+        "keywords": [
+            "ioBroker",
+            "template",
+            "Smart Home",
+            "home automation"
+        ],
+        "licenseInformation": {
+            "type": "free",
+            "license": "MIT"
+        },
+        "platform": "Javascript/Node.js",
+        "icon": "my-time-adapter.png",
+        "enabled": true,
+        "extIcon": "https://raw.githubusercontent.com/oliver/ictb-time/main/admin/my-time-adapter.png",
+        "readme": "https://github.com/oliver/ioBroker.ictb-time/blob/main/README.md",
+        "loglevel": "info",
+        "tier": 3,
+        "mode": "daemon",
+        "type": "logic",
+        "compact": true,
+        "connectionType": "local",
+        "dataSource": "push",
+        "adminUI": {
+            "config": "materialize"
+        },
+        "dependencies": [
+            {
+                "js-controller": ">=6.0.11"
+            }
+        ],
+        "globalDependencies": [
+            {
+                "admin": ">=7.0.23"
+            }
+        ]
+    },
+    "native": {
+        "option1": true,
+        "option2": "42"
+    },
+    "objects": [],
+    "instanceObjects": []
+}
