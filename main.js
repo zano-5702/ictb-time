@@ -1,7 +1,7 @@
 'use strict';
 
-const utils = require('@iobroker/adapter-core'); // Adapter utilities
-const fetch = require('node-fetch'); // HTTP-Requests
+const utils = require('@iobroker/adapter-core');
+const fetch = require('node-fetch');
 
 class WorkTimeAdapter extends utils.Adapter {
     constructor(options) {
@@ -11,108 +11,151 @@ class WorkTimeAdapter extends utils.Adapter {
         });
         this.on('ready', this.onReady.bind(this));
         this.on('stateChange', this.onStateChange.bind(this));
+        this.on('message', this.onMessage.bind(this));  // Neu: onMessage-Handler
 
-        // Interne Speicherung aktiver Sitzungen, z. B. für die Arbeitszeiterfassung
-        // Struktur: { "deviceId": { customer: "...", startTime: <timestamp>, workDescription: "" } }
         this.activeSessions = {};
     }
 
     async onReady() {
-        // Abonniere die Zustände der geofences (aus traccar) – diese kommen vom Fremdsystem
+        // Kunden und Mitarbeiter aus der nativen Konfiguration laden, falls nicht vorhanden, initialisieren.
+        this.config.customers = this.config.customers || {};
+        this.config.employees = this.config.employees || {};
+
+        // Beispiel: Falls noch keine Kunden hinterlegt sind, setze Standardwerte
+        if (Object.keys(this.config.customers).length === 0) {
+            this.config.customers = {
+                "Home-Herrengasse": {
+                    name: "Home-Herrengasse",
+                    address: "Herrengasse 1, Musterstadt",
+                    hourlyRate: 50,
+                    assignment: "Installation"
+                },
+                "Office-Mitte": {
+                    name: "Office-Mitte",
+                    address: "Musterstraße 2, Musterstadt",
+                    hourlyRate: 75,
+                    assignment: "Consulting"
+                }
+            };
+        }
+        if (Object.keys(this.config.employees).length === 0) {
+            this.config.employees = {
+                "traccar.0.devices.1": { firstName: "Max", lastName: "Mustermann" },
+                "traccar.0.devices.2": { firstName: "Erika", lastName: "Musterfrau" }
+            };
+        }
+
+        // Erstelle oder aktualisiere Objekte für Kunden und Mitarbeiter
+        await this.updateCustomerAndEmployeeObjects();
+
+        // Abonniere die Zustände der Geofences
         this.subscribeForeignStates('traccar.0.devices.*.geofences_string');
 
-        // Lade oder setze Kundenstamm und Mitarbeiterliste – diese können auch über die Admin-Konfiguration gepflegt werden
-        this.customers = {
-            "Home-Herrengasse": {
-                name: "Home-Herrengasse",
-                address: "Herrengasse 1, Musterstadt",
-                hourlyRate: 50,
-                assignment: "Installation"
-            },
-            "Office-Mitte": {
-                name: "Office-Mitte",
-                address: "Musterstraße 2, Musterstadt",
-                hourlyRate: 75,
-                assignment: "Consulting"
-            }
-        };
+        this.log.info('WorkTime Adapter gestartet. Aktuelle Konfiguration: ' + JSON.stringify({
+            customers: this.config.customers,
+            employees: this.config.employees
+        }));
+    }
 
-        this.employees = {
-            "traccar.0.devices.1": { firstName: "Max", lastName: "Mustermann" },
-            "traccar.0.devices.2": { firstName: "Erika", lastName: "Musterfrau" }
-        };
-
-        this.log.info('WorkTime Adapter gestartet.');
+    async onMessage(obj) {
+        if (obj && obj.command === 'saveConfig') {
+            // Speichere die übergebenen Kunden und Mitarbeiter in der nativen Konfiguration
+            this.config.customers = obj.data.customers;
+            this.config.employees = obj.data.employees;
+            this.log.info('Konfiguration aktualisiert: ' + JSON.stringify(obj.data));
+            // Lege die zugehörigen Objekte im ioBroker-Objekttree an
+            await this.updateCustomerAndEmployeeObjects();
+            this.sendTo(obj.from, obj.command, { result: 'ok' }, obj.callback);
+        } else if (obj && obj.command === 'getConfig') {
+            // Sende die aktuelle Konfiguration zurück
+            this.sendTo(obj.from, obj.command, {
+                customers: this.config.customers,
+                employees: this.config.employees
+            }, obj.callback);
+        }
     }
 
     /**
-     * Wird bei Zustandsänderungen (z. B. geofences_string) aufgerufen.
-     * @param {string} id - z.B. traccar.0.devices.1.geofences_string
-     * @param {object} state - Enthält den neuen Wert, Zeitstempel etc.
+     * Legt für jeden Kunden und jeden Mitarbeiter ein Objekt im ioBroker-Objekttree an.
+     * Kunden werden unter "o.kunden.<kundenID>" abgelegt,
+     * Mitarbeiter unter "o.mitarbeiter.<deviceID>".
      */
+    async updateCustomerAndEmployeeObjects() {
+        // Kunden-Objekte anlegen/aktualisieren
+        for (const custKey in this.config.customers) {
+            const customer = this.config.customers[custKey];
+            // Erstelle ein Objekt unter <adapter namespace>.o.kunden.<custKey>
+            await this.setObjectNotExistsAsync(`o.kunden.${custKey}`, {
+                type: 'channel',
+                common: {
+                    name: customer.name,
+                    desc: `Adresse: ${customer.address}, Stundensatz: ${customer.hourlyRate} EUR, Auftrag: ${customer.assignment}`
+                },
+                native: customer
+            });
+        }
+        // Mitarbeiter-Objekte anlegen/aktualisieren
+        for (const empKey in this.config.employees) {
+            const employee = this.config.employees[empKey];
+            await this.setObjectNotExistsAsync(`o.mitarbeiter.${empKey}`, {
+                type: 'channel',
+                common: {
+                    name: `${employee.firstName} ${employee.lastName}`
+                },
+                native: employee
+            });
+        }
+        this.log.info('Objekte für Kunden und Mitarbeiter aktualisiert.');
+    }
+
     async onStateChange(id, state) {
         if (!state || state.val === undefined) return;
 
-        // Extrahiere die Geräte-ID, z. B. "traccar.0.devices.1"
         const match = id.match(/(traccar\.0\.devices\.\d+)\.geofences_string/);
         if (!match) return;
         const deviceKey = match[1];
-
-        const employee = this.employees[deviceKey];
+        const employee = this.config.employees[deviceKey];
         if (!employee) {
             this.log.warn(`Kein Mitarbeiter für ${deviceKey} definiert.`);
             return;
         }
-
         const newValue = state.val.toString().trim();
         const timestamp = state.ts || Date.now();
 
-        // Wenn ein gültiger Kundenname vorliegt (nicht "0", "null" oder leer)
         if (newValue && newValue !== '0' && newValue.toLowerCase() !== 'null') {
-            // Eintritt in einen Kundenbereich
             if (!this.activeSessions[deviceKey]) {
                 this.activeSessions[deviceKey] = {
                     customer: newValue,
                     startTime: timestamp,
-                    workDescription: "" // Kann später per Admin-UI ergänzt werden
+                    workDescription: ""
                 };
                 this.log.info(`${employee.firstName} ${employee.lastName} betritt ${newValue} um ${new Date(timestamp).toLocaleString()}`);
-            } else {
-                // Falls sich der Kundenwert ändert (Wechsel des Kunden)
-                if (this.activeSessions[deviceKey].customer !== newValue) {
-                    await this.closeSession(deviceKey, timestamp);
-                    this.activeSessions[deviceKey] = {
-                        customer: newValue,
-                        startTime: timestamp,
-                        workDescription: ""
-                    };
-                    this.log.info(`${employee.firstName} ${employee.lastName} wechselt zu ${newValue} um ${new Date(timestamp).toLocaleString()}`);
-                }
+            } else if (this.activeSessions[deviceKey].customer !== newValue) {
+                await this.closeSession(deviceKey, timestamp);
+                this.activeSessions[deviceKey] = {
+                    customer: newValue,
+                    startTime: timestamp,
+                    workDescription: ""
+                };
+                this.log.info(`${employee.firstName} ${employee.lastName} wechselt zu ${newValue} um ${new Date(timestamp).toLocaleString()}`);
             }
         } else {
-            // Wert ist "0", leer oder null → Mitarbeiter verlässt den Kundenbereich
             if (this.activeSessions[deviceKey]) {
                 await this.closeSession(deviceKey, timestamp);
             }
         }
     }
 
-    /**
-     * Schließt eine aktive Sitzung und protokolliert den Arbeitseinsatz.
-     * @param {string} deviceKey - z.B. "traccar.0.devices.1"
-     * @param {number} endTime - Zeitstempel des Verlassens
-     */
     async closeSession(deviceKey, endTime) {
         const session = this.activeSessions[deviceKey];
         if (!session) return;
-        const employee = this.employees[deviceKey];
+        const employee = this.config.employees[deviceKey];
         const startTime = session.startTime;
         const durationMs = endTime - startTime;
         const durationHours = durationMs / (1000 * 60 * 60);
         const customerKey = session.customer;
-        const customer = this.customers[customerKey] || { name: customerKey, hourlyRate: 0 };
+        const customer = this.config.customers[customerKey] || { name: customerKey, hourlyRate: 0 };
 
-        // Erstelle einen Logeintrag
         const logEntry = {
             employee: `${employee.firstName} ${employee.lastName}`,
             customer: customer.name,
@@ -121,10 +164,9 @@ class WorkTimeAdapter extends utils.Adapter {
             startTime: new Date(startTime).toISOString(),
             endTime: new Date(endTime).toISOString(),
             durationHours: durationHours,
-            workDescription: session.workDescription // Ergänzbar über Admin-UI
+            workDescription: session.workDescription
         };
 
-        // Speichere den Logeintrag als State (Beispiel: workLog.<timestamp>)
         const logStateId = `workLog.${Date.now()}`;
         await this.setObjectNotExistsAsync(logStateId, {
             type: 'state',
@@ -140,23 +182,16 @@ class WorkTimeAdapter extends utils.Adapter {
         await this.setStateAsync(logStateId, { val: JSON.stringify(logEntry), ack: true });
         this.log.info(`Arbeitseinsatz protokolliert: ${JSON.stringify(logEntry)}`);
 
-        // Entferne die aktive Sitzung
         delete this.activeSessions[deviceKey];
-
-        // Hier können Aggregationen (Tages-, Wochen-, Monatsstunden etc.) aktualisiert werden.
         await this.updateAggregates(employee, logEntry);
     }
 
     async updateAggregates(employee, logEntry) {
-        // Platzhalter: Hier Aggregationslogik implementieren
+        // Platzhalter für Aggregationslogik
         this.log.info(`Aggregatwerte für ${employee.firstName} ${employee.lastName} mit ${logEntry.durationHours.toFixed(2)} Stunden aktualisiert.`);
     }
 
-    /**
-     * Sendet einen HTTP POST-Request an ein Google Apps Script (falls benötigt)
-     */
     async writeTimeToSheet(type, date, time) {
-        // Beispiel-Datenstruktur
         const data = {
             date: date,
             startTime: type === 'startTime' ? time : '',
