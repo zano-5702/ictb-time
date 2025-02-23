@@ -19,3 +19,4 @@ systemvorbereitung für das erstellen der pdf
 Test Scripte ausführen: 
 cd /opt/iobroker/ictb-time
 node test_full.js
+node test_admin_full.js 
