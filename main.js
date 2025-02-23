@@ -11,17 +11,17 @@ class WorkTimeAdapter extends utils.Adapter {
         });
         this.on('ready', this.onReady.bind(this));
         this.on('stateChange', this.onStateChange.bind(this));
-        this.on('message', this.onMessage.bind(this));  // Neu: onMessage-Handler
+        this.on('message', this.onMessage.bind(this));
 
         this.activeSessions = {};
     }
 
     async onReady() {
-        // Kunden und Mitarbeiter aus der nativen Konfiguration laden, falls nicht vorhanden, initialisieren.
+        // Kunden und Mitarbeiter aus der nativen Konfiguration laden, falls nicht vorhanden, initialisieren
         this.config.customers = this.config.customers || {};
         this.config.employees = this.config.employees || {};
 
-        // Beispiel: Falls noch keine Kunden hinterlegt sind, setze Standardwerte
+        // Beispiel: Standardwerte setzen, wenn noch keine Konfiguration vorhanden ist
         if (Object.keys(this.config.customers).length === 0) {
             this.config.customers = {
                 "Home-Herrengasse": {
@@ -45,10 +45,11 @@ class WorkTimeAdapter extends utils.Adapter {
             };
         }
 
-        // Erstelle oder aktualisiere Objekte für Kunden und Mitarbeiter
-        await this.updateCustomerAndEmployeeObjects();
+        // Aktualisiere die Objekte im ioBroker-Objekttree
+        await this.updateCustomerObjects();
+        await this.updateEmployeeObjects();
 
-        // Abonniere die Zustände der Geofences
+        // Abonniere die Zustände der Geofences (die von traccar kommen)
         this.subscribeForeignStates('traccar.0.devices.*.geofences_string');
 
         this.log.info('WorkTime Adapter gestartet. Aktuelle Konfiguration: ' + JSON.stringify({
@@ -59,12 +60,13 @@ class WorkTimeAdapter extends utils.Adapter {
 
     async onMessage(obj) {
         if (obj && obj.command === 'saveConfig') {
-            // Speichere die übergebenen Kunden und Mitarbeiter in der nativen Konfiguration
+            // Speichere die übergebene Konfiguration in der nativen Konfiguration
             this.config.customers = obj.data.customers;
             this.config.employees = obj.data.employees;
             this.log.info('Konfiguration aktualisiert: ' + JSON.stringify(obj.data));
-            // Lege die zugehörigen Objekte im ioBroker-Objekttree an
-            await this.updateCustomerAndEmployeeObjects();
+            // Aktualisiere die Objekte im Objekttree
+            await this.updateCustomerObjects();
+            await this.updateEmployeeObjects();
             this.sendTo(obj.from, obj.command, { result: 'ok' }, obj.callback);
         } else if (obj && obj.command === 'getConfig') {
             // Sende die aktuelle Konfiguration zurück
@@ -76,16 +78,24 @@ class WorkTimeAdapter extends utils.Adapter {
     }
 
     /**
-     * Legt für jeden Kunden und jeden Mitarbeiter ein Objekt im ioBroker-Objekttree an.
-     * Kunden werden unter "o.kunden.<kundenID>" abgelegt,
-     * Mitarbeiter unter "o.mitarbeiter.<deviceID>".
+     * Legt oder aktualisiert für jeden Kunden ein Objekt unter ictb-time.0.kunden.<kundenID>.
+     * Löscht vorhandene Kundenobjekte, die nicht mehr in der Konfiguration stehen.
      */
-    async updateCustomerAndEmployeeObjects() {
-        // Kunden-Objekte anlegen/aktualisieren
+    async updateCustomerObjects() {
+        // Abrufen der bereits existierenden Kunden-Objekte
+        const view = await this.getObjectViewAsync('system', 'channel', {
+            startkey: `${this.namespace}.kunden.`,
+            endkey: `${this.namespace}.kunden.\u9999`
+        });
+        let existingIds = [];
+        if (view && view.rows) {
+            existingIds = view.rows.map(row => row.id);
+        }
+        // Für jeden Kunden aus der Konfiguration: Erstellen oder Aktualisieren
         for (const custKey in this.config.customers) {
             const customer = this.config.customers[custKey];
-            // Erstelle ein Objekt unter <adapter namespace>.o.kunden.<custKey>
-            await this.setObjectNotExistsAsync(`o.kunden.${custKey}`, {
+            const objId = `${this.namespace}.kunden.${custKey}`;
+            await this.setObjectAsync(objId, {
                 type: 'channel',
                 common: {
                     name: customer.name,
@@ -93,19 +103,45 @@ class WorkTimeAdapter extends utils.Adapter {
                 },
                 native: customer
             });
+            // Entferne den Eintrag aus der bestehenden Liste
+            existingIds = existingIds.filter(id => id !== objId);
         }
-        // Mitarbeiter-Objekte anlegen/aktualisieren
+        // Lösche alle Kundenobjekte, die nicht mehr in der Konfiguration stehen
+        for (const id of existingIds) {
+            await this.delObjectAsync(id);
+        }
+        this.log.info('Kundenobjekte aktualisiert.');
+    }
+
+    /**
+     * Legt oder aktualisiert für jeden Mitarbeiter ein Objekt unter ictb-time.0.mitarbeiter.<deviceID>.
+     * Löscht vorhandene Mitarbeiterobjekte, die nicht mehr in der Konfiguration stehen.
+     */
+    async updateEmployeeObjects() {
+        const view = await this.getObjectViewAsync('system', 'channel', {
+            startkey: `${this.namespace}.mitarbeiter.`,
+            endkey: `${this.namespace}.mitarbeiter.\u9999`
+        });
+        let existingIds = [];
+        if (view && view.rows) {
+            existingIds = view.rows.map(row => row.id);
+        }
         for (const empKey in this.config.employees) {
             const employee = this.config.employees[empKey];
-            await this.setObjectNotExistsAsync(`o.mitarbeiter.${empKey}`, {
+            const objId = `${this.namespace}.mitarbeiter.${empKey}`;
+            await this.setObjectAsync(objId, {
                 type: 'channel',
                 common: {
                     name: `${employee.firstName} ${employee.lastName}`
                 },
                 native: employee
             });
+            existingIds = existingIds.filter(id => id !== objId);
         }
-        this.log.info('Objekte für Kunden und Mitarbeiter aktualisiert.');
+        for (const id of existingIds) {
+            await this.delObjectAsync(id);
+        }
+        this.log.info('Mitarbeiterobjekte aktualisiert.');
     }
 
     async onStateChange(id, state) {
@@ -114,6 +150,7 @@ class WorkTimeAdapter extends utils.Adapter {
         const match = id.match(/(traccar\.0\.devices\.\d+)\.geofences_string/);
         if (!match) return;
         const deviceKey = match[1];
+
         const employee = this.config.employees[deviceKey];
         if (!employee) {
             this.log.warn(`Kein Mitarbeiter für ${deviceKey} definiert.`);
@@ -187,7 +224,7 @@ class WorkTimeAdapter extends utils.Adapter {
     }
 
     async updateAggregates(employee, logEntry) {
-        // Platzhalter für Aggregationslogik
+        // Platzhalter: Aggregationslogik hier einfügen
         this.log.info(`Aggregatwerte für ${employee.firstName} ${employee.lastName} mit ${logEntry.durationHours.toFixed(2)} Stunden aktualisiert.`);
     }
 
@@ -224,3 +261,4 @@ if (module.parent) {
 } else {
     new WorkTimeAdapter();
 }
+
