@@ -3,9 +3,7 @@
 const utils = require('@iobroker/adapter-core');
 const fetch = require('node-fetch');
 const adapterName = require('./package.json').name.split('.').pop();
-
-// Global deklarierte Variable – muss vor allen Funktionen stehen.
-let adapter;
+let adapter;  // globale Variable
 
 class WorkTimeAdapter extends utils.Adapter {
     constructor(options) {
@@ -18,7 +16,7 @@ class WorkTimeAdapter extends utils.Adapter {
     }
 
     async onReady() {
-        // Lade Kunden und Mitarbeiter aus der nativen Konfiguration oder initialisiere Standardwerte
+        // Lade Kunden und Mitarbeiter aus der nativen Konfiguration oder setze Standardwerte
         this.config.customers = this.config.customers || {};
         this.config.employees = this.config.employees || {};
 
@@ -52,7 +50,7 @@ class WorkTimeAdapter extends utils.Adapter {
         // Lege zusätzlich die TimeTracking-States in 0_userdata.0.TimeTracking an
         await createTimeTrackingStates(this);
 
-        // Abonniere den Geofence-Status (z.B. für Device 1)
+        // Abonniere Geofence-Änderungen (z.B. für Device 1)
         this.subscribeForeignStates('traccar.0.devices.*.geofences_string');
 
         this.log.info('WorkTime Adapter gestartet. Aktuelle Konfiguration: ' +
@@ -83,12 +81,14 @@ class WorkTimeAdapter extends utils.Adapter {
         let existingIds = view && view.rows ? view.rows.map(row => row.id) : [];
         for (const custKey in this.config.customers) {
             const customer = this.config.customers[custKey];
+            // Sicherstellen, dass ein Name vorhanden ist
+            const customerName = customer.name || custKey || "Unbenannt";
             const objId = `${this.namespace}.kunden.${custKey}`;
             await this.setObjectAsync(objId, {
                 type: 'channel',
                 common: {
-                    name: customer.name,
-                    desc: `Adresse: ${customer.address}, Stundensatz: ${customer.hourlyRate} EUR, Auftrag: ${customer.assignment}`
+                    name: customerName,
+                    desc: `Adresse: ${customer.address || ""}, Stundensatz: ${customer.hourlyRate || 0} EUR, Auftrag: ${customer.assignment || ""}`
                 },
                 native: customer
             });
@@ -108,11 +108,14 @@ class WorkTimeAdapter extends utils.Adapter {
         let existingIds = view && view.rows ? view.rows.map(row => row.id) : [];
         for (const empKey in this.config.employees) {
             const employee = this.config.employees[empKey];
+            // Sicherstellen, dass Vor- und Nachname vorhanden sind
+            const firstName = employee.firstName || "Unbekannt";
+            const lastName = employee.lastName || "";
             const objId = `${this.namespace}.mitarbeiter.${empKey}`;
             await this.setObjectAsync(objId, {
                 type: 'channel',
                 common: {
-                    name: `${employee.firstName} ${employee.lastName}`
+                    name: `${firstName} ${lastName}`.trim()
                 },
                 native: employee
             });
@@ -128,7 +131,7 @@ class WorkTimeAdapter extends utils.Adapter {
         if (!state || state.val === undefined) return;
         const match = id.match(/(traccar\.0\.devices\.\d+)\.geofences_string/);
         if (!match) return;
-        // Rufe die Geofence-Verarbeitung auf und übergebe "this" als Adapter-Instanz
+        // Rufe Geofence-Verarbeitung auf und übergebe "this" als Adapter-Instanz
         processGeofenceChange(this, { state: state, oldState: {} }).catch(err => this.log.error(err));
     }
 
@@ -145,12 +148,14 @@ class WorkTimeAdapter extends utils.Adapter {
 // Funktionen außerhalb der Klasse
 // ------------------------------
 
+// Hilfsfunktion: createStateIfNotExists (nutzt createStateAsync, um vorhandene States nicht zu überschreiben)
 async function createStateIfNotExists(adapterInstance, id, initialValue, commonObj) {
     await adapterInstance.createStateAsync(id, initialValue, false, commonObj);
 }
 
+// Funktion zum Anlegen der TimeTracking-States in 0_userdata.0.TimeTracking
 async function createTimeTrackingStates(adapterInstance) {
-    // Array mit Kundendaten – statisch, kann aber auch dynamisch aus der Konfiguration geladen werden.
+    // Array mit Kundendaten – statisch, kann auch dynamisch aus der Konfiguration geladen werden.
     const customers = [
         {
             name: "HW2-9-Wohlen",
@@ -337,7 +342,6 @@ async function createLogEntry(geofenceID, timeSpentHours) {
 let lastGeofenceID = "";
 
 // Verarbeitet Änderungen am Geofence-State (z.B. traccar.0.devices.1.geofences_string)
-// Nutzt die übergebene Adapter-Instanz
 async function processGeofenceChange(adapterInstance, obj) {
     const newID = (obj.state.val || "").trim();
     const oldID = (obj.oldState && obj.oldState.val ? obj.oldState.val : "").trim();
