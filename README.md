@@ -14,3 +14,8 @@ iobroker upload ictb-time
 iobroker restart ictb-time
 
 systemvorbereitung für das erstellen der pdf
+
+
+Test Scripte ausführen: 
+cd /opt/iobroker/ictb-time
+node test_full.js
