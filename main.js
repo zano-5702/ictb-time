@@ -3,7 +3,7 @@
 const utils = require('@iobroker/adapter-core');
 const fetch = require('node-fetch');
 const adapterName = require('./package.json').name.split('.').pop();
-let adapter;  // globale Variable
+let adapter;  // Globale Variable
 
 class WorkTimeAdapter extends utils.Adapter {
     constructor(options) {
@@ -81,7 +81,6 @@ class WorkTimeAdapter extends utils.Adapter {
         let existingIds = view && view.rows ? view.rows.map(row => row.id) : [];
         for (const custKey in this.config.customers) {
             const customer = this.config.customers[custKey];
-            // Sicherstellen, dass ein Name vorhanden ist
             const customerName = customer.name || custKey || "Unbenannt";
             const objId = `${this.namespace}.kunden.${custKey}`;
             await this.setObjectAsync(objId, {
@@ -108,7 +107,6 @@ class WorkTimeAdapter extends utils.Adapter {
         let existingIds = view && view.rows ? view.rows.map(row => row.id) : [];
         for (const empKey in this.config.employees) {
             const employee = this.config.employees[empKey];
-            // Sicherstellen, dass Vor- und Nachname vorhanden sind
             const firstName = employee.firstName || "Unbekannt";
             const lastName = employee.lastName || "";
             const objId = `${this.namespace}.mitarbeiter.${empKey}`;
@@ -148,12 +146,23 @@ class WorkTimeAdapter extends utils.Adapter {
 // Funktionen außerhalb der Klasse
 // ------------------------------
 
-// Hilfsfunktion: createStateIfNotExists (nutzt createStateAsync, um vorhandene States nicht zu überschreiben)
+// Neuer Ansatz: Nutze setObjectNotExistsAsync statt createStateAsync, da createStateAsync veraltet ist.
 async function createStateIfNotExists(adapterInstance, id, initialValue, commonObj) {
-    await adapterInstance.createStateAsync(id, initialValue, false, commonObj);
+    // Stelle sicher, dass commonObj.name existiert
+    if (!commonObj.name) {
+        commonObj.name = "Unbenannt";
+    }
+    let obj = await adapterInstance.getObjectAsync(id);
+    if (!obj) {
+        await adapterInstance.setObjectNotExistsAsync(id, {
+            type: 'state',
+            common: commonObj,
+            native: {}
+        });
+        await adapterInstance.setStateAsync(id, { val: initialValue, ack: true });
+    }
 }
 
-// Funktion zum Anlegen der TimeTracking-States in 0_userdata.0.TimeTracking
 async function createTimeTrackingStates(adapterInstance) {
     // Array mit Kundendaten – statisch, kann auch dynamisch aus der Konfiguration geladen werden.
     const customers = [
