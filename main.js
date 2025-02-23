@@ -1,404 +1,300 @@
 'use strict';
 
-const utils = require('@iobroker/adapter-core');
-const fetch = require('node-fetch');
-const adapterName = require('./package.json').name.split('.').pop();
-let adapter;  // Globale Variable
+const utils = require('@iobroker/adapter-core'); // Adapter utilities
 
 class WorkTimeAdapter extends utils.Adapter {
     constructor(options) {
-        super({ ...options, name: 'ictb-time' });
-        this.activeSessions = {}; // Für Arbeitszeitsitzungen (z.B. Geofence-Eintritte)
+        super({
+            ...options,
+            name: 'worktime'
+        });
         this.on('ready', this.onReady.bind(this));
         this.on('stateChange', this.onStateChange.bind(this));
-        this.on('message', this.onMessage.bind(this));
-        this.on('unload', this.onUnload.bind(this));
-    }
 
-    async onReady() {
-        // Lade Kunden und Mitarbeiter aus der nativen Konfiguration oder setze Standardwerte
-        this.config.customers = this.config.customers || {};
-        this.config.employees = this.config.employees || {};
+        // Interne Speicherung aktiver Arbeitssitzungen pro Device
+        // Struktur: { "traccar.0.devices.1": { customer: "Kundenname", startTime: <timestamp>, workDescription: "" } }
+        this.activeSessions = {};
 
-        if (Object.keys(this.config.customers).length === 0) {
-            this.config.customers = {
-                "Home-Herrengasse": {
-                    name: "Home-Herrengasse",
-                    address: "Herrengasse 1, Musterstadt",
-                    hourlyRate: 50,
-                    assignment: "Installation"
-                },
-                "Office-Mitte": {
-                    name: "Office-Mitte",
-                    address: "Musterstraße 2, Musterstadt",
-                    hourlyRate: 75,
-                    assignment: "Consulting"
-                }
-            };
-        }
-        if (Object.keys(this.config.employees).length === 0) {
+        // Falls in den Konfigurationen noch keine Mitarbeiter vorhanden sind, Standardwerte setzen
+        if (!this.config.employees || Object.keys(this.config.employees).length === 0) {
+            this.log.info('Keine Mitarbeiter in config.employees gefunden. Setze Standardwerte.');
             this.config.employees = {
                 "traccar.0.devices.1": { firstName: "Max", lastName: "Mustermann" },
                 "traccar.0.devices.2": { firstName: "Erika", lastName: "Musterfrau" }
             };
         }
+    }
 
-        // Aktualisiere Objekte im ioBroker-Objekttree
-        await this.updateCustomerObjects();
-        await this.updateEmployeeObjects();
+    async onReady() {
+        this.log.info('onReady gestartet.');
 
-        // Lege zusätzlich die TimeTracking-States in 0_userdata.0.TimeTracking an
-        await createTimeTrackingStates(this);
-
-        // Abonniere Geofence-Änderungen (z.B. für Device 1)
+        // Abonniere alle Geofence-Zustände der traccar-Devices
         this.subscribeForeignStates('traccar.0.devices.*.geofences_string');
+        this.log.info('Abonniere Zustände: traccar.0.devices.*.geofences_string');
 
-        this.log.info('WorkTime Adapter gestartet. Aktuelle Konfiguration: ' +
-            JSON.stringify({ customers: this.config.customers, employees: this.config.employees }));
+        // Beispielhafter Kundenstamm (dies könnte auch über die Adapter-Konfiguration gepflegt werden)
+        this.customers = {
+            "HW2-9-Wohlen": {
+                name: "HW2-9-Wohlen",
+                address: "Beispielstraße 123, Wohlen",
+                hourlyRate: 60,
+                assignment: "Service"
+            },
+            "Office-Mitte": {
+                name: "Office-Mitte",
+                address: "Musterstraße 2, Musterstadt",
+                hourlyRate: 75,
+                assignment: "Consulting"
+            }
+            // Weitere Kunden ...
+        };
+        this.log.info('Kundenstamm geladen:', JSON.stringify(this.customers));
+
+        // Mitarbeiterliste aus den Konfigurationen
+        this.employees = this.config.employees;
+        this.log.info('Mitarbeiter geladen:', JSON.stringify(this.employees));
+
+        // Lade eventuell gespeicherte Startzeit (z.B. aus einem vorherigen Start)
+        const storedStart = await this.getStateAsync('startTime');
+        if (storedStart && storedStart.val) {
+            this.startTime = new Date(storedStart.val);
+            const plannedStopTime = this.calculatePlannedStopTime(this.startTime);
+            this.log.info(`Gespeicherte Startzeit gefunden: ${this.startTime.toISOString()}, geplanter Endzeitpunkt: ${plannedStopTime.toISOString()}`);
+            this.startCountdown(plannedStopTime);
+        } else {
+            this.log.info('Keine gespeicherte Startzeit gefunden.');
+        }
+
+        this.log.info('WorkTime Adapter gestartet.');
     }
 
-    async onMessage(obj) {
-        if (obj && obj.command === 'saveConfig') {
-            this.config.customers = obj.data.customers;
-            this.config.employees = obj.data.employees;
-            this.log.info('Konfiguration aktualisiert: ' + JSON.stringify(obj.data));
-            await this.updateCustomerObjects();
-            await this.updateEmployeeObjects();
-            this.sendTo(obj.from, obj.command, { result: 'ok' }, obj.callback);
-        } else if (obj && obj.command === 'getConfig') {
-            this.sendTo(obj.from, obj.command, {
-                customers: this.config.customers,
-                employees: this.config.employees
-            }, obj.callback);
-        }
-    }
-
-    async updateCustomerObjects() {
-        const view = await this.getObjectViewAsync('system', 'channel', {
-            startkey: `${this.namespace}.kunden.`,
-            endkey: `${this.namespace}.kunden.\u9999`
-        });
-        let existingIds = view && view.rows ? view.rows.map(row => row.id) : [];
-        for (const custKey in this.config.customers) {
-            const customer = this.config.customers[custKey];
-            const customerName = customer.name || custKey || "Unbenannt";
-            const objId = `${this.namespace}.kunden.${custKey}`;
-            await this.setObjectAsync(objId, {
-                type: 'channel',
-                common: {
-                    name: customerName,
-                    desc: `Adresse: ${customer.address || ""}, Stundensatz: ${customer.hourlyRate || 0} EUR, Auftrag: ${customer.assignment || ""}`
-                },
-                native: customer
-            });
-            existingIds = existingIds.filter(id => id !== objId);
-        }
-        for (const id of existingIds) {
-            await this.delObjectAsync(id);
-        }
-        this.log.info('Kundenobjekte aktualisiert.');
-    }
-
-    async updateEmployeeObjects() {
-        const view = await this.getObjectViewAsync('system', 'channel', {
-            startkey: `${this.namespace}.mitarbeiter.`,
-            endkey: `${this.namespace}.mitarbeiter.\u9999`
-        });
-        let existingIds = view && view.rows ? view.rows.map(row => row.id) : [];
-        for (const empKey in this.config.employees) {
-            const employee = this.config.employees[empKey];
-            const firstName = employee.firstName || "Unbekannt";
-            const lastName = employee.lastName || "";
-            const objId = `${this.namespace}.mitarbeiter.${empKey}`;
-            await this.setObjectAsync(objId, {
-                type: 'channel',
-                common: {
-                    name: `${firstName} ${lastName}`.trim()
-                },
-                native: employee
-            });
-            existingIds = existingIds.filter(id => id !== objId);
-        }
-        for (const id of existingIds) {
-            await this.delObjectAsync(id);
-        }
-        this.log.info('Mitarbeiterobjekte aktualisiert.');
-    }
-
+    /**
+     * Wird bei Zustandsänderungen (z. B. geofences_string) aufgerufen.
+     * @param {string} id - z.B. traccar.0.devices.1.geofences_string
+     * @param {object} state - Enthält den neuen Wert, Zeitstempel etc.
+     */
     async onStateChange(id, state) {
-        if (!state || state.val === undefined) return;
+        this.log.debug(`onStateChange aufgerufen für ${id} mit state: ${JSON.stringify(state)}`);
+        if (!state || state.val === undefined) {
+            this.log.debug('State oder State.val ist undefined – ignoriere.');
+            return;
+        }
+        
+        // Extrahiere die Geräte-ID (z. B. "traccar.0.devices.1")
         const match = id.match(/(traccar\.0\.devices\.\d+)\.geofences_string/);
-        if (!match) return;
-        // Rufe Geofence-Verarbeitung auf und übergebe "this" als Adapter-Instanz
-        processGeofenceChange(this, { state: state, oldState: {} }).catch(err => this.log.error(err));
-    }
+        if (!match) {
+            this.log.warn(`Kein Geräte-Match für id ${id}`);
+            return;
+        }
+        const deviceKey = match[1];
+        this.log.debug(`Geräte-ID extrahiert: ${deviceKey}`);
 
-    onUnload(callback) {
-        try {
-            callback();
-        } catch (e) {
-            callback();
+        const employee = this.employees[deviceKey];
+        if (!employee) {
+            this.log.warn(`Kein Mitarbeiter für ${deviceKey} definiert.`);
+            return;
+        }
+        this.log.debug(`Mitarbeiter gefunden: ${employee.firstName} ${employee.lastName}`);
+
+        const newValue = state.val.toString().trim();
+        const timestamp = state.ts || Date.now();
+        this.log.info(`Neuer geofences_string Wert für ${deviceKey}: "${newValue}" um ${new Date(timestamp).toLocaleString()}`);
+
+        // Wenn ein gültiger Kundenname vorliegt (nicht "0", "null" oder leer)
+        if (newValue && newValue !== '0' && newValue.toLowerCase() !== 'null') {
+            if (!this.activeSessions[deviceKey]) {
+                this.activeSessions[deviceKey] = {
+                    customer: newValue,
+                    startTime: timestamp,
+                    workDescription: ""
+                };
+                this.log.info(`${employee.firstName} ${employee.lastName} betritt ${newValue} um ${new Date(timestamp).toLocaleString()}`);
+            } else {
+                if (this.activeSessions[deviceKey].customer !== newValue) {
+                    this.log.info(`${employee.firstName} ${employee.lastName} wechselt von ${this.activeSessions[deviceKey].customer} zu ${newValue} um ${new Date(timestamp).toLocaleString()}`);
+                    await this.closeSession(deviceKey, timestamp);
+                    this.activeSessions[deviceKey] = {
+                        customer: newValue,
+                        startTime: timestamp,
+                        workDescription: ""
+                    };
+                } else {
+                    this.log.debug(`${employee.firstName} ${employee.lastName} bleibt bei ${newValue}. Keine Änderung.`);
+                }
+            }
+        } else {
+            // Wert "0", leer oder null → Mitarbeiter verlässt den Kundenbereich
+            this.log.info(`${employee.firstName} ${employee.lastName} verlässt den Kundenbereich (${this.activeSessions[deviceKey] ? this.activeSessions[deviceKey].customer : 'unbekannt'})`);
+            if (this.activeSessions[deviceKey]) {
+                await this.closeSession(deviceKey, timestamp);
+            }
         }
     }
-}
 
-// ------------------------------
-// Funktionen außerhalb der Klasse
-// ------------------------------
+    /**
+     * Schließt eine aktive Sitzung und erstellt einen Logeintrag.
+     * @param {string} deviceKey - z.B. "traccar.0.devices.1"
+     * @param {number} endTime - Zeitstempel des Verlassens
+     */
+    async closeSession(deviceKey, endTime) {
+        const session = this.activeSessions[deviceKey];
+        if (!session) {
+            this.log.warn(`Keine aktive Sitzung für ${deviceKey} gefunden.`);
+            return;
+        }
+        const employee = this.employees[deviceKey];
+        const startTime = session.startTime;
+        const durationMs = endTime - startTime;
+        const durationHours = durationMs / (1000 * 60 * 60);
+        const customerKey = session.customer;
+        const customer = this.customers[customerKey] || { name: customerKey, hourlyRate: 0 };
 
-// Neuer Ansatz: Nutze setObjectNotExistsAsync statt createStateAsync, da createStateAsync veraltet ist.
-async function createStateIfNotExists(adapterInstance, id, initialValue, commonObj) {
-    // Stelle sicher, dass commonObj.name existiert
-    if (!commonObj.name) {
-        commonObj.name = "Unbenannt";
-    }
-    let obj = await adapterInstance.getObjectAsync(id);
-    if (!obj) {
-        await adapterInstance.setObjectNotExistsAsync(id, {
+        const logEntry = {
+            employee: `${employee.firstName} ${employee.lastName}`,
+            customer: customer.name,
+            address: customer.address || '',
+            hourlyRate: customer.hourlyRate,
+            startTime: new Date(startTime).toISOString(),
+            endTime: new Date(endTime).toISOString(),
+            durationHours: durationHours,
+            workDescription: session.workDescription
+        };
+
+        const logStateId = `workLog.${Date.now()}`;
+        await this.setObjectNotExistsAsync(logStateId, {
             type: 'state',
-            common: commonObj,
+            common: {
+                name: 'Work Log Entry',
+                type: 'string',
+                role: 'value.text',
+                read: true,
+                write: false
+            },
             native: {}
         });
-        await adapterInstance.setStateAsync(id, { val: initialValue, ack: true });
-    }
-}
+        await this.setStateAsync(logStateId, { val: JSON.stringify(logEntry), ack: true });
+        this.log.info(`Arbeitseinsatz protokolliert: ${JSON.stringify(logEntry)}`);
 
-async function createTimeTrackingStates(adapterInstance) {
-    // Array mit Kundendaten – statisch, kann auch dynamisch aus der Konfiguration geladen werden.
-    const customers = [
-        {
-            name: "HW2-9-Wohlen",
-            address: "Wohlenstrasse 9, 1234 Town",
-            hourlyRate: 85
-        },
-        {
-            name: "Home-Herrengasse",
-            address: "Herrengasse 1, 5678 City",
-            hourlyRate: 95
-        },
-        {
-            name: "Büro-Friedmatt3",
-            address: "Friedmatt 3, 5678 City",
-            hourlyRate: 95
+        delete this.activeSessions[deviceKey];
+        await this.updateAggregates(employee, logEntry);
+    }
+
+    /**
+     * Platzhalterfunktion zur Aktualisierung aggregierter Arbeitszeiten.
+     */
+    async updateAggregates(employee, logEntry) {
+        this.log.info(`Aktualisiere Aggregatwerte für ${employee.firstName} ${employee.lastName} mit ${logEntry.durationHours.toFixed(2)} Stunden.`);
+        // Hier: Aggregationen abrufen, aktualisieren und speichern.
+    }
+
+    /**
+     * Berechnet die geplante Endzeit basierend auf der Startzeit und Pausenregeln.
+     */
+    calculatePlannedStopTime(startTime) {
+        const msPerHour = 60 * 60 * 1000;
+        let plannedStop;
+        if (this.config.plannedWorkDayHours > this.config.secondBreakThresholdHours) {
+            plannedStop = new Date(startTime.getTime() +
+                (this.config.plannedWorkDayHours * msPerHour) +
+                (this.config.firstBreakMinutes * 60 * 1000) +
+                (this.config.secondBreakMinutes * 60 * 1000));
+        } else if (this.config.plannedWorkDayHours > this.config.firstBreakThresholdHours) {
+            plannedStop = new Date(startTime.getTime() +
+                (this.config.plannedWorkDayHours * msPerHour) +
+                (this.config.firstBreakMinutes * 60 * 1000));
+        } else {
+            plannedStop = new Date(startTime.getTime() + (this.config.plannedWorkDayHours * msPerHour));
         }
-    ];
-
-    for (let customer of customers) {
-        const geofenceName = customer.name;
-        const address = customer.address || "";
-        const hourlyRate = customer.hourlyRate || 0;
-        const basePath = `0_userdata.0.TimeTracking.${geofenceName}`;
-
-        await createStateIfNotExists(adapterInstance, `${basePath}.time_day`, 0, {
-            name: "Time (Day)",
-            type: "number",
-            role: "value",
-            read: true,
-            write: true,
-            def: 0
-        });
-        await createStateIfNotExists(adapterInstance, `${basePath}.time_week`, 0, {
-            name: "Time (Week)",
-            type: "number",
-            role: "value",
-            read: true,
-            write: true,
-            def: 0
-        });
-        await createStateIfNotExists(adapterInstance, `${basePath}.time_month`, 0, {
-            name: "Time (Month)",
-            type: "number",
-            role: "value",
-            read: true,
-            write: true,
-            def: 0
-        });
-        await createStateIfNotExists(adapterInstance, `${basePath}.time_year`, 0, {
-            name: "Time (Year)",
-            type: "number",
-            role: "value",
-            read: true,
-            write: true,
-            def: 0
-        });
-        await createStateIfNotExists(adapterInstance, `${basePath}.lastEnter`, "", {
-            name: "Last Enter Timestamp",
-            type: "string",
-            role: "date",
-            read: true,
-            write: true,
-            def: ""
-        });
-        await createStateIfNotExists(adapterInstance, `${basePath}.work_log`, "[]", {
-            name: "Work Log (JSON)",
-            type: "string",
-            role: "json",
-            read: true,
-            write: true,
-            def: "[]"
-        });
-        await createStateIfNotExists(adapterInstance, `${basePath}.work_report`, "", {
-            name: "Work Report",
-            type: "string",
-            role: "text",
-            read: true,
-            write: true,
-            def: ""
-        });
-        await createStateIfNotExists(adapterInstance, `${basePath}.hourly_rate`, hourlyRate, {
-            name: "Hourly Rate",
-            type: "number",
-            role: "value",
-            read: true,
-            write: true,
-            def: hourlyRate
-        });
-        await createStateIfNotExists(adapterInstance, `${basePath}.customerAddress`, address, {
-            name: "Customer Address",
-            type: "string",
-            role: "text",
-            read: true,
-            write: true,
-            def: address
-        });
-        adapterInstance.log.info(`TimeTracking-States für "${geofenceName}" angelegt oder aktualisiert.`);
+        this.log.debug(`Geplante Endzeit berechnet: ${plannedStop.toISOString()}`);
+        return plannedStop;
     }
 
-    // Optionale States für manuelle Büroarbeit
-    await createStateIfNotExists(adapterInstance, `0_userdata.0.TimeTracking.Manual.working`, false, {
-        name: "Manual Work Active",
-        type: "boolean",
-        role: "switch",
-        read: true,
-        write: true,
-        def: false
-    });
-    await createStateIfNotExists(adapterInstance, `0_userdata.0.TimeTracking.Manual.selectedID`, "", {
-        name: "Selected ID for Manual Work",
-        type: "string",
-        role: "text",
-        read: true,
-        write: true,
-        def: ""
-    });
-    await createStateIfNotExists(adapterInstance, `0_userdata.0.TimeTracking.Manual.lastEnter`, "", {
-        name: "Manual Work Start Time",
-        type: "string",
-        role: "date",
-        read: true,
-        write: true,
-        def: ""
-    });
-    await createStateIfNotExists(adapterInstance, `0_userdata.0.TimeTracking.Manual.work_report`, "", {
-        name: "Manual Work Report",
-        type: "string",
-        role: "text",
-        read: true,
-        write: true,
-        def: ""
-    });
+    /**
+     * Berechnet die gearbeitete Zeit in Millisekunden zwischen Start und Stop.
+     */
+    getWorkedTime(startTime, stopTime) {
+        return stopTime - startTime;
+    }
 
-    adapterInstance.log.info("Alle TimeTracking-States für Kunden und manuelle Büroarbeit wurden angelegt/aktualisiert.");
-}
+    /**
+     * Sendet einen HTTP POST-Request an dein Google Apps Script.
+     */
+    async writeTimeToSheet(type, date, time) {
+        const data = {
+            date: date,
+            startTime: type === 'startTime' ? time : '',
+            stopTime: type === 'stopTime' ? time : '',
+            config: {
+                plannedWorkDayHours: this.config.plannedWorkDayHours,
+                firstBreakThresholdHours: this.config.firstBreakThresholdHours,
+                firstBreakMinutes: this.config.firstBreakMinutes,
+                secondBreakThresholdHours: this.config.secondBreakThresholdHours,
+                secondBreakMinutes: this.config.secondBreakMinutes,
+                sheetName: this.config.sheetName
+            }
+        };
 
-// Hilfsfunktion: Sleep
-function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-// Fügt zu einem State (über Pfad) Stunden hinzu
-async function addTimeToCounter(path, hoursToAdd) {
-    let state = await adapter.getStateAsync(path);
-    let currentVal = state && state.val ? parseFloat(state.val) : 0;
-    currentVal += hoursToAdd;
-    await adapter.setStateAsync(path, { val: currentVal.toFixed(2), ack: true });
-}
-
-// Addiert Zeit (in Stunden) zu den Zählern eines bestimmten Geofences
-async function addTimeToCounters(geofenceID, timeMs) {
-    const hours = timeMs / 3600000;
-    const basePath = `0_userdata.0.TimeTracking.${geofenceID}`;
-    await addTimeToCounter(`${basePath}.time_day`, hours);
-    await addTimeToCounter(`${basePath}.time_week`, hours);
-    await addTimeToCounter(`${basePath}.time_month`, hours);
-    await addTimeToCounter(`${basePath}.time_year`, hours);
-}
-
-// Erstellt einen Log-Eintrag für einen Geofence
-async function createLogEntry(geofenceID, timeSpentHours) {
-    const basePath = `0_userdata.0.TimeTracking.${geofenceID}`;
-    const now = new Date();
-    let log = [];
-    const logState = await adapter.getStateAsync(`${basePath}.work_log`);
-    if (logState && logState.val) {
         try {
-            log = JSON.parse(logState.val);
-        } catch (e) {
-            adapter.log.warn("Fehler beim Parsen des Logs, benutze leeres Array");
-            log = [];
+            const response = await fetch(this.config.appsScriptUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            this.log.info(`${type} erfolgreich an Google Sheets gesendet: ${response.status}`);
+        } catch (error) {
+            this.log.error(`Fehler beim Senden von ${type} an Google Sheets: ${error}`);
         }
     }
-    log.push({
-        timestamp: now.toLocaleString(),
-        timeSpent: timeSpentHours.toFixed(2),
-        workDescription: "(kein Arbeitsbericht)"
-    });
-    await adapter.setStateAsync(`${basePath}.work_log`, { val: JSON.stringify(log), ack: true });
-    adapter.log.info(`Log-Eintrag für ${geofenceID}: ${timeSpentHours.toFixed(2)} Stunden`);
-}
 
-// Globaler Speicher für den zuletzt bekannten Geofence
-let lastGeofenceID = "";
-
-// Verarbeitet Änderungen am Geofence-State (z.B. traccar.0.devices.1.geofences_string)
-async function processGeofenceChange(adapterInstance, obj) {
-    const newID = (obj.state.val || "").trim();
-    const oldID = (obj.oldState && obj.oldState.val ? obj.oldState.val : "").trim();
-
-    adapterInstance.log.info(`Geofence Änderung erkannt: alt="${oldID}" - neu="${newID}"`);
-
-    // Wartezeit: ca. 5 Minuten 10 Sekunden
-    await sleep(310000);
-
-    const currentState = await adapterInstance.getStateAsync("traccar.0.devices.1.geofences_string");
-    const stableID = (currentState && currentState.val ? currentState.val : "").trim();
-
-    if (stableID !== newID) {
-        adapterInstance.log.info(`Geofence stabilisiert sich nicht: ursprünglicher Wert "${newID}" vs. aktueller Wert "${stableID}". Abbruch.`);
-        return;
+    /**
+     * Formatiert ein Datum als DD.MM.YYYY.
+     */
+    formatDate(date) {
+        return [
+            this.padNumber(date.getDate()),
+            this.padNumber(date.getMonth() + 1),
+            date.getFullYear()
+        ].join('.');
     }
 
-    if (lastGeofenceID && lastGeofenceID !== newID) {
-        adapterInstance.log.info(`Verlasse Geofence ${lastGeofenceID}`);
-        const lastEnterState = await adapterInstance.getStateAsync(`0_userdata.0.TimeTracking.${lastGeofenceID}.lastEnter`);
-        if (lastEnterState && lastEnterState.val) {
-            const lastEnter = new Date(lastEnterState.val);
-            const now = new Date();
-            const timeMs = now.getTime() - lastEnter.getTime();
-            const hours = timeMs / 3600000;
-            await addTimeToCounters(lastGeofenceID, timeMs);
-            await createLogEntry(lastGeofenceID, hours);
-        }
-        await adapterInstance.setStateAsync(`0_userdata.0.TimeTracking.${lastGeofenceID}.lastEnter`, { val: "", ack: true });
+    /**
+     * Formatiert ein Datum als Uhrzeit im deutschen Format.
+     */
+    formatGermanTime(date, withSeconds = false) {
+        const hours = this.padNumber(date.getHours());
+        const minutes = this.padNumber(date.getMinutes());
+        const seconds = this.padNumber(date.getSeconds());
+        return withSeconds ? `${hours}:${minutes}:${seconds}` : `${hours}:${minutes} Uhr`;
     }
 
-    if (newID) {
-        adapterInstance.log.info(`Betrete Geofence ${newID}`);
-        await adapterInstance.setStateAsync(`0_userdata.0.TimeTracking.${newID}.lastEnter`, { val: new Date().toISOString(), ack: true });
+    /**
+     * Formatiert eine Dauer (in Millisekunden) als HH:MM:SS.
+     */
+    formatTimeDifference(duration) {
+        const [hours, minutes, seconds] = this.splitTime(duration);
+        return `${this.padNumber(hours)}:${this.padNumber(minutes)}:${this.padNumber(seconds)}`;
     }
 
-    lastGeofenceID = newID;
-}
+    /**
+     * Teilt eine Dauer in Stunden, Minuten und Sekunden auf.
+     */
+    splitTime(duration) {
+        const hours = Math.floor(duration / (1000 * 60 * 60));
+        const minutes = Math.floor((duration % (1000 * 60 * 60)) / (1000 * 60));
+        const seconds = Math.floor((duration % (1000 * 60)) / 1000);
+        return [hours, minutes, seconds];
+    }
 
-// Adapter starten
-function startAdapter(options) {
-    options = options || {};
-    Object.assign(options, { name: adapterName });
-    adapter = new WorkTimeAdapter(options);
+    /**
+     * Führt eine Zahl als String mit führender Null aus.
+     */
+    padNumber(value) {
+        return value.toString().padStart(2, '0');
+    }
 }
-
-startAdapter();
 
 if (module.parent) {
     module.exports = (options) => new WorkTimeAdapter(options);
+} else {
+    new WorkTimeAdapter();
 }
