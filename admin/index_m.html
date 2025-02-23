@@ -1,104 +1,95 @@
-"use strict";
-
-// Globale Variablen zur Speicherung der Konfiguration
-var customers = {};
-var employees = {};
-
-// Diese Funktion wird automatisch vom ioBroker-Admin-Framework aufgerufen,
-// wenn die Adapter-Einstellungen geladen werden.
-function load(settings, onChange) {
-    console.log("load(): Einstellungen werden geladen:", settings);
-    // Falls in den gespeicherten Einstellungen Kunden/Mitarbeiter vorhanden sind, übernehmen wir sie.
-    customers = settings.customers || {};
-    employees = settings.employees || {};
-
-    updateCustomerList();
-    updateEmployeeList();
-
-    // onChange() signalisiert, dass sich etwas geändert hat.
-    onChange();
-}
-
-// Diese Funktion wird vom Admin-Framework aufgerufen, wenn der Benutzer auf "Speichern" klickt.
-function save(callback) {
-    var newSettings = {
-        customers: customers,
-        employees: employees
-    };
-    console.log("save(): Neue Einstellungen werden gespeichert:", newSettings);
-    // Rückgabe der neuen Einstellungen über den Callback.
-    callback(newSettings);
-}
-
-// Aktualisiert die Anzeige der Kunden in der Liste.
-function updateCustomerList() {
-    var $list = $("#customerList");
-    $list.empty();
-    for (var key in customers) {
-        if (customers.hasOwnProperty(key)) {
-            var customer = customers[key];
-            $list.append($("<li>").text(
-                customer.name + " - " +
-                customer.address + " - " +
-                customer.hourlyRate + " EUR - " +
-                customer.assignment
-            ));
-        }
-    }
-}
-
-// Aktualisiert die Anzeige der Mitarbeiter in der Liste.
-function updateEmployeeList() {
-    var $list = $("#employeeList");
-    $list.empty();
-    for (var key in employees) {
-        if (employees.hasOwnProperty(key)) {
-            var emp = employees[key];
-            $list.append($("<li>").text(
-                key + " : " + emp.firstName + " " + emp.lastName
-            ));
-        }
-    }
-}
-
-// Event-Handler für das Kundenformular.
-$("#customerForm").on("submit", function(e) {
-    e.preventDefault();
-    var customer = {
-        name: $("#customerName").val().trim(),
-        address: $("#customerAddress").val().trim(),
-        hourlyRate: parseFloat($("#hourlyRate").val()),
-        assignment: $("#assignment").val().trim()
-    };
-    // Kunde hinzufügen oder überschreiben.
-    customers[customer.name] = customer;
-    updateCustomerList();
-    // Signalisiere, dass sich etwas geändert hat – der Admin-Framework ruft danach save() auf.
-    console.log("Neuer Kunde hinzugefügt:", customer);
-    this.reset();
-});
-
-// Event-Handler für das Mitarbeiterformular.
-$("#employeeForm").on("submit", function(e) {
-    e.preventDefault();
-    var employee = {
-        deviceId: $("#deviceId").val().trim(),
-        firstName: $("#firstName").val().trim(),
-        lastName: $("#lastName").val().trim()
-    };
-    // Mitarbeiter hinzufügen oder überschreiben. Die DeviceID wird als Schlüssel verwendet.
-    employees[employee.deviceId] = employee;
-    updateEmployeeList();
-    console.log("Neuer Mitarbeiter hinzugefügt:", employee);
-    this.reset();
-});
-
-// Standardmäßig wird die Initialisierungsfunktion von adapter-settings.js aufgerufen.
-// In document.ready rufen wir initSettings() auf, damit die Standardbuttons angezeigt werden.
-$(document).ready(function() {
-    if (typeof initSettings === 'function') {
-        initSettings(); // Initialisiert die Standardbuttons: "Speichern", "Speichern und Schließen", "Schließen"
-    } else {
-        console.error("initSettings() ist nicht definiert. Bitte prüfe den Pfad zu adapter-settings.js!");
-    }
-});
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <title>ictb‑time Adapter – Einstellungen</title>
+    <!-- Standard Styles und Skripte aus der ioBroker-Admin-Oberfläche -->
+    <link rel="stylesheet" type="text/css" href="../../css/adapter.css"/>
+    <link rel="stylesheet" type="text/css" href="../../lib/css/materialize.css">
+    <link rel="stylesheet" type="text/css" href="../../lib/css/themes/jquery-ui/default/jquery-ui.min.css">
+    <link rel="stylesheet" type="text/css" href="../../lib/css/fancytree/ui.fancytree.min.css"/>
+    <link rel="stylesheet" type="text/css" href="../../lib/css/iob/selectID.css"/>
+    <script type="text/javascript" src="../../lib/js/jquery-3.2.1.min.js"></script>
+    <script type="text/javascript" src="../../socket.io/socket.io.js"></script>
+    <script type="text/javascript" src="../../lib/js/jquery-ui-1.10.3.full.min.js"></script>
+    <script type="text/javascript" src="../../lib/js/jquery.fancytree-all.min.js"></script>
+    <script type="text/javascript" src="../../js/translate.js"></script>
+    <script type="text/javascript" src="../../lib/js/selectID.js"></script>
+    <script type="text/javascript" src="../../lib/js/materialize.js"></script>
+    <!-- adapter-settings.js sorgt für die Standardbuttons -->
+    <script type="text/javascript" src="../../js/adapter-settings.js"></script>
+    <!-- Eigene Übersetzungen, falls benötigt -->
+    <script type="text/javascript" src="words.js"></script>
+    <!-- Unser eigenes Admin-Skript -->
+    <script type="text/javascript" src="index_m.js"></script>
+    <style>
+        /* Zusätzliche Anpassungen */
+        .section { margin-bottom: 20px; }
+        .section h2 { border-bottom: 1px solid #ccc; padding-bottom: 5px; }
+        .form-row { margin: 5px 0; }
+        .form-row label { display: inline-block; width: 150px; }
+        .form-row input { width: calc(100% - 160px); }
+        .list-container { margin-top: 10px; }
+        .list-container ul { list-style: none; padding: 0; }
+        .list-container li { background: #eee; margin: 3px 0; padding: 5px; border-radius: 3px; }
+    </style>
+</head>
+<body>
+<div id="adapter-container">
+    <h1>ictb‑time Adapter – Einstellungen</h1>
+    <div class="section" id="customerSection">
+        <h2>Kundenstamm</h2>
+        <form id="customerForm">
+            <div class="form-row">
+                <label for="customerName">Kundenname:</label>
+                <input type="text" id="customerName" class="value" required>
+            </div>
+            <div class="form-row">
+                <label for="customerAddress">Adresse:</label>
+                <input type="text" id="customerAddress" class="value">
+            </div>
+            <div class="form-row">
+                <label for="hourlyRate">Stundensatz (EUR):</label>
+                <input type="number" id="hourlyRate" class="value" step="0.01">
+            </div>
+            <div class="form-row">
+                <label for="assignment">Auftrag / Zuweisung:</label>
+                <input type="text" id="assignment" class="value">
+            </div>
+            <div class="form-row">
+                <button type="submit">Kunde hinzufügen</button>
+            </div>
+        </form>
+        <div class="list-container">
+            <h3>Aktuelle Kunden</h3>
+            <ul id="customerList"></ul>
+        </div>
+    </div>
+    
+    <div class="section" id="employeeSection">
+        <h2>Mitarbeiter</h2>
+        <form id="employeeForm">
+            <div class="form-row">
+                <label for="deviceId">Device ID (z. B. traccar.0.devices.1):</label>
+                <input type="text" id="deviceId" class="value" required>
+            </div>
+            <div class="form-row">
+                <label for="firstName">Vorname:</label>
+                <input type="text" id="firstName" class="value" required>
+            </div>
+            <div class="form-row">
+                <label for="lastName">Nachname:</label>
+                <input type="text" id="lastName" class="value" required>
+            </div>
+            <div class="form-row">
+                <button type="submit">Mitarbeiter hinzufügen</button>
+            </div>
+        </form>
+        <div class="list-container">
+            <h3>Aktuelle Mitarbeiter</h3>
+            <ul id="employeeList"></ul>
+        </div>
+    </div>
+</div>
+</body>
+</html>
