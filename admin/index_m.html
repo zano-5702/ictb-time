@@ -14,7 +14,6 @@
             background-color: #fff;
             padding: 20px;
             border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
             max-width: 800px;
             margin: auto;
         }
@@ -48,7 +47,7 @@
 <body>
     <div class="container">
         <h1>ictb-time Adapter – Konfiguration</h1>
-
+        
         <h2>Kundenstamm</h2>
         <form id="customerForm">
             <label for="customerName">Kundenname:</label>
@@ -72,7 +71,7 @@
 
         <h2>Mitarbeiter</h2>
         <form id="employeeForm">
-            <label for="deviceId">Device ID (z. B. traccar.0.devices.1):</label>
+            <label for="deviceId">Device ID (z.B. traccar.0.devices.1):</label>
             <input type="text" id="deviceId" required>
             
             <label for="firstName">Vorname:</label>
@@ -87,13 +86,8 @@
         <ul id="employeeList"></ul>
 
         <hr>
-
-        <h2>Arbeitslog</h2>
-        <div id="workLog">
-            <!-- Hier werden Logeinträge angezeigt -->
-        </div>
+        <button id="saveConfigBtn">Konfiguration speichern</button>
     </div>
     <script src="index_m.js"></script>
 </body>
 </html>
-
