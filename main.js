@@ -4,6 +4,9 @@ const utils = require('@iobroker/adapter-core');
 const fetch = require('node-fetch');
 const adapterName = require('./package.json').name.split('.').pop();
 
+// Global deklarierte Variable – muss vor allen Funktionen stehen.
+let adapter;
+
 class WorkTimeAdapter extends utils.Adapter {
     constructor(options) {
         super({ ...options, name: 'ictb-time' });
@@ -15,7 +18,7 @@ class WorkTimeAdapter extends utils.Adapter {
     }
 
     async onReady() {
-        // Laden der nativen Konfiguration oder Initialisieren mit Standardwerten
+        // Lade Kunden und Mitarbeiter aus der nativen Konfiguration oder initialisiere Standardwerte
         this.config.customers = this.config.customers || {};
         this.config.employees = this.config.employees || {};
 
@@ -46,10 +49,10 @@ class WorkTimeAdapter extends utils.Adapter {
         await this.updateCustomerObjects();
         await this.updateEmployeeObjects();
 
-        // Lege die TimeTracking-States in 0_userdata.0.TimeTracking an
+        // Lege zusätzlich die TimeTracking-States in 0_userdata.0.TimeTracking an
         await createTimeTrackingStates(this);
 
-        // Abonniere Geofence-Änderungen (z.B. für Device 1)
+        // Abonniere den Geofence-Status (z.B. für Device 1)
         this.subscribeForeignStates('traccar.0.devices.*.geofences_string');
 
         this.log.info('WorkTime Adapter gestartet. Aktuelle Konfiguration: ' +
@@ -142,13 +145,12 @@ class WorkTimeAdapter extends utils.Adapter {
 // Funktionen außerhalb der Klasse
 // ------------------------------
 
-// Hilfsfunktion: createStateIfNotExists (nutzt createStateAsync, um bestehende States nicht zu überschreiben)
 async function createStateIfNotExists(adapterInstance, id, initialValue, commonObj) {
     await adapterInstance.createStateAsync(id, initialValue, false, commonObj);
 }
 
-// Funktion zum Anlegen der TimeTracking-States in 0_userdata.0.TimeTracking
 async function createTimeTrackingStates(adapterInstance) {
+    // Array mit Kundendaten – statisch, kann aber auch dynamisch aus der Konfiguration geladen werden.
     const customers = [
         {
             name: "HW2-9-Wohlen",
@@ -290,7 +292,7 @@ function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// Fügt Stunden zu einem State hinzu
+// Fügt zu einem State (über Pfad) Stunden hinzu
 async function addTimeToCounter(path, hoursToAdd) {
     let state = await adapter.getStateAsync(path);
     let currentVal = state && state.val ? parseFloat(state.val) : 0;
@@ -335,6 +337,7 @@ async function createLogEntry(geofenceID, timeSpentHours) {
 let lastGeofenceID = "";
 
 // Verarbeitet Änderungen am Geofence-State (z.B. traccar.0.devices.1.geofences_string)
+// Nutzt die übergebene Adapter-Instanz
 async function processGeofenceChange(adapterInstance, obj) {
     const newID = (obj.state.val || "").trim();
     const oldID = (obj.oldState && obj.oldState.val ? obj.oldState.val : "").trim();
@@ -379,8 +382,6 @@ function startAdapter(options) {
     options = options || {};
     Object.assign(options, { name: adapterName });
     adapter = new WorkTimeAdapter(options);
-
-    // Adapter-Instanz wird durch den Konstruktor erstellt, onReady etc. werden automatisch aufgerufen.
 }
 
 startAdapter();
