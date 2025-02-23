@@ -1,0 +1,10 @@
+{
+  "name": "iobroker.ictb-time",
+  "version": "0.0.2",
+  "description": "Adapter for time tracking",
+  "author": "oliver",
+  "license": "MIT",
+  "dependencies": {
+    "@iobroker/adapter-core": "^2.6.0"
+  }
+}
