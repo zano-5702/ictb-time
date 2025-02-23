@@ -1,93 +1,104 @@
-<!DOCTYPE html>
-<html lang="de">
-<head>
-    <meta charset="utf-8" />
-    <title>ictb-time Adapter – Konfiguration</title>
-    <link rel="stylesheet" href="admin.css">
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            background-color: #f0f0f0;
-            padding: 20px;
-        }
-        .container {
-            background-color: #fff;
-            padding: 20px;
-            border-radius: 10px;
-            max-width: 800px;
-            margin: auto;
-        }
-        h1, h2 {
-            text-align: center;
-        }
-        form {
-            margin-bottom: 20px;
-        }
-        label {
-            display: block;
-            margin-top: 10px;
-        }
-        input, button {
-            width: 100%;
-            padding: 8px;
-            margin-top: 5px;
-        }
-        ul {
-            list-style: none;
-            padding: 0;
-        }
-        li {
-            background: #eee;
-            margin: 5px 0;
-            padding: 5px 10px;
-            border-radius: 4px;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>ictb-time Adapter – Konfiguration</h1>
-        
-        <h2>Kundenstamm</h2>
-        <form id="customerForm">
-            <label for="customerName">Kundenname:</label>
-            <input type="text" id="customerName" required>
-            
-            <label for="customerAddress">Adresse:</label>
-            <input type="text" id="customerAddress">
-            
-            <label for="hourlyRate">Stundensatz (EUR):</label>
-            <input type="number" id="hourlyRate" step="0.01">
-            
-            <label for="assignment">Auftrag / Zuweisung:</label>
-            <input type="text" id="assignment">
-            
-            <button type="submit">Kunde hinzufügen</button>
-        </form>
-        <h3>Aktuelle Kunden</h3>
-        <ul id="customerList"></ul>
+"use strict";
 
-        <hr>
+// Globale Variablen zur Speicherung der Konfiguration
+var customers = {};
+var employees = {};
 
-        <h2>Mitarbeiter</h2>
-        <form id="employeeForm">
-            <label for="deviceId">Device ID (z.B. traccar.0.devices.1):</label>
-            <input type="text" id="deviceId" required>
-            
-            <label for="firstName">Vorname:</label>
-            <input type="text" id="firstName" required>
-            
-            <label for="lastName">Nachname:</label>
-            <input type="text" id="lastName" required>
-            
-            <button type="submit">Mitarbeiter hinzufügen</button>
-        </form>
-        <h3>Aktuelle Mitarbeiter</h3>
-        <ul id="employeeList"></ul>
+// Diese Funktion wird automatisch vom ioBroker-Admin-Framework aufgerufen,
+// wenn die Adapter-Einstellungen geladen werden.
+function load(settings, onChange) {
+    console.log("load(): Einstellungen werden geladen:", settings);
+    // Falls in den gespeicherten Einstellungen Kunden/Mitarbeiter vorhanden sind, übernehmen wir sie.
+    customers = settings.customers || {};
+    employees = settings.employees || {};
 
-        <hr>
-        <button id="saveConfigBtn">Konfiguration speichern</button>
-    </div>
-    <script src="index_m.js"></script>
-</body>
-</html>
+    updateCustomerList();
+    updateEmployeeList();
+
+    // onChange() signalisiert, dass sich etwas geändert hat.
+    onChange();
+}
+
+// Diese Funktion wird vom Admin-Framework aufgerufen, wenn der Benutzer auf "Speichern" klickt.
+function save(callback) {
+    var newSettings = {
+        customers: customers,
+        employees: employees
+    };
+    console.log("save(): Neue Einstellungen werden gespeichert:", newSettings);
+    // Rückgabe der neuen Einstellungen über den Callback.
+    callback(newSettings);
+}
+
+// Aktualisiert die Anzeige der Kunden in der Liste.
+function updateCustomerList() {
+    var $list = $("#customerList");
+    $list.empty();
+    for (var key in customers) {
+        if (customers.hasOwnProperty(key)) {
+            var customer = customers[key];
+            $list.append($("<li>").text(
+                customer.name + " - " +
+                customer.address + " - " +
+                customer.hourlyRate + " EUR - " +
+                customer.assignment
+            ));
+        }
+    }
+}
+
+// Aktualisiert die Anzeige der Mitarbeiter in der Liste.
+function updateEmployeeList() {
+    var $list = $("#employeeList");
+    $list.empty();
+    for (var key in employees) {
+        if (employees.hasOwnProperty(key)) {
+            var emp = employees[key];
+            $list.append($("<li>").text(
+                key + " : " + emp.firstName + " " + emp.lastName
+            ));
+        }
+    }
+}
+
+// Event-Handler für das Kundenformular.
+$("#customerForm").on("submit", function(e) {
+    e.preventDefault();
+    var customer = {
+        name: $("#customerName").val().trim(),
+        address: $("#customerAddress").val().trim(),
+        hourlyRate: parseFloat($("#hourlyRate").val()),
+        assignment: $("#assignment").val().trim()
+    };
+    // Kunde hinzufügen oder überschreiben.
+    customers[customer.name] = customer;
+    updateCustomerList();
+    // Signalisiere, dass sich etwas geändert hat – der Admin-Framework ruft danach save() auf.
+    console.log("Neuer Kunde hinzugefügt:", customer);
+    this.reset();
+});
+
+// Event-Handler für das Mitarbeiterformular.
+$("#employeeForm").on("submit", function(e) {
+    e.preventDefault();
+    var employee = {
+        deviceId: $("#deviceId").val().trim(),
+        firstName: $("#firstName").val().trim(),
+        lastName: $("#lastName").val().trim()
+    };
+    // Mitarbeiter hinzufügen oder überschreiben. Die DeviceID wird als Schlüssel verwendet.
+    employees[employee.deviceId] = employee;
+    updateEmployeeList();
+    console.log("Neuer Mitarbeiter hinzugefügt:", employee);
+    this.reset();
+});
+
+// Standardmäßig wird die Initialisierungsfunktion von adapter-settings.js aufgerufen.
+// In document.ready rufen wir initSettings() auf, damit die Standardbuttons angezeigt werden.
+$(document).ready(function() {
+    if (typeof initSettings === 'function') {
+        initSettings(); // Initialisiert die Standardbuttons: "Speichern", "Speichern und Schließen", "Schließen"
+    } else {
+        console.error("initSettings() ist nicht definiert. Bitte prüfe den Pfad zu adapter-settings.js!");
+    }
+});
